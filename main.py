@@ -1,12 +1,19 @@
 """
 PromptMaster Pro — AI 繪圖提示詞管理器
 主入口：python main.py
+
+修正記錄:
+  - Fix: ui.clipboard.write() 不可 await，移除 await 修正 TypeError
+  - Feat: 多語系支援 (zh-TW 預設 / en-US / ja-JP)
+  - Feat: 各類別不重複建議提示詞面板 (💡 建議)
+  - Feat: 預設輸出 4K 16:9 (1920×1080)
 """
 
 import json
 from nicegui import ui, app
 
 from app.state import AppState
+from app.i18n import SUPPORTED_LOCALES
 
 state = AppState()
 
@@ -97,6 +104,69 @@ body {
     transform: translateY(-2px);
     box-shadow: 0 4px 20px rgba(0,0,0,0.15);
 }
+
+.unified-prompt-card {
+    background: linear-gradient(135deg, rgba(124,58,237,0.12), rgba(6,182,212,0.08)) !important;
+    border: 2px solid rgba(124,58,237,0.35) !important;
+    border-radius: 14px !important;
+}
+
+.unified-prompt-text {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-all;
+    padding: 12px;
+    border-radius: 8px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(255,255,255,0.06);
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.gen-btn {
+    background: linear-gradient(135deg, #7c3aed, #06b6d4) !important;
+    color: white !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+.gen-btn:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 20px rgba(124,58,237,0.4) !important;
+}
+
+.preview-img {
+    border-radius: 12px;
+    border: 1px solid rgba(124,58,237,0.3);
+    max-width: 100%;
+    max-height: 400px;
+    object-fit: contain;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 8px rgba(124,58,237,0.3); }
+    50% { box-shadow: 0 0 20px rgba(124,58,237,0.6); }
+}
+.generating {
+    animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+.sugg-chip {
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-size: 11px;
+}
+.sugg-chip:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(6,182,212,0.2);
+}
+
+.lang-btn {
+    font-size: 11px !important;
+    min-width: 36px !important;
+    padding: 2px 6px !important;
+}
 </style>
 """
 
@@ -109,21 +179,30 @@ def index():
     ui.add_head_html(CUSTOM_CSS)
     ui.dark_mode(state.dark_mode)
 
+    # 從設定檔還原語系
+    saved_locale = state.api_settings.get("locale", "zh-TW")
+    if saved_locale != state.locale:
+        state.set_locale(saved_locale)
+
     # ------ 頂部 Header ------
     with ui.header().classes("items-center px-6 no-wrap h-14").style(
         "background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); "
         "border-bottom: 1px solid rgba(124,58,237,0.3);"
     ):
         ui.icon("brush", size="28px", color="#7c3aed")
-        ui.label("PromptMaster Pro").classes("text-lg font-bold ml-2").style(
+        ui.label(state.t("app_title")).classes("text-lg font-bold ml-2").style(
             "background: linear-gradient(135deg, #a855f7, #06b6d4); "
             "-webkit-background-clip: text; -webkit-text-fill-color: transparent;"
         )
-        ui.label("詞譜專家").classes("text-xs ml-2 opacity-60")
+        ui.label(state.t("app_subtitle")).classes("text-xs ml-2 opacity-60")
         ui.space()
         ui.label("").bind_text_from(
-            state, "selected_tags", lambda tags: f"已選 {len(tags)} 標籤"
+            state, "selected_tags",
+            lambda tags: state.t("selected_tags_count", n=len(tags))
         ).classes("text-xs opacity-50 mr-4")
+
+        # 語系切換
+        build_lang_switcher()
 
         # 深色模式切換
         dark_toggle = ui.button(
@@ -156,6 +235,34 @@ def index():
 
 
 # ============================================================
+#  語系切換器
+# ============================================================
+@ui.refreshable
+def build_lang_switcher():
+    locale_labels = {"zh-TW": "繁中", "en-US": "EN", "ja-JP": "JA"}
+    with ui.button_group().props("flat"):
+        for loc in SUPPORTED_LOCALES:
+            is_active = loc == state.locale
+            btn = ui.button(
+                locale_labels.get(loc, loc),
+                on_click=lambda l=loc: switch_locale(l),
+            ).props(
+                f"{'color=purple-5' if is_active else 'color=grey-6'} no-caps dense size=xs"
+            ).classes("lang-btn")
+            if is_active:
+                btn.style("font-weight: 700;")
+
+
+def switch_locale(locale: str):
+    state.set_locale(locale)
+    # 全面刷新
+    build_lang_switcher.refresh()
+    build_category_nav.refresh()
+    build_tag_library.refresh()
+    build_workbench.refresh()
+
+
+# ============================================================
 #  深色模式切換
 # ============================================================
 def toggle_dark(btn):
@@ -171,14 +278,16 @@ def toggle_dark(btn):
 def build_category_nav():
     # 搜尋框
     ui.input(
-        placeholder="🔍 搜尋標籤...",
+        placeholder=state.t("search_placeholder"),
         on_change=lambda e: on_search(e.value),
     ).classes("mx-3 mt-3").props("dense outlined dark")
 
     ui.separator().classes("my-2")
 
     # 類別按鈕
-    ui.label("📂 類別").classes("text-xs font-bold uppercase tracking-wider ml-4 opacity-50")
+    ui.label(state.t("nav_categories")).classes(
+        "text-xs font-bold uppercase tracking-wider ml-4 opacity-50"
+    )
 
     for cat in state.categories:
         is_active = cat["id"] == state.active_category
@@ -193,10 +302,12 @@ def build_category_nav():
     ui.separator().classes("my-2")
 
     # LoRA 區域
-    ui.label("🔌 LoRA").classes("text-xs font-bold uppercase tracking-wider ml-4 opacity-50")
+    ui.label(state.t("nav_lora")).classes(
+        "text-xs font-bold uppercase tracking-wider ml-4 opacity-50"
+    )
 
     # 依分類分組顯示 LoRA
-    lora_categories = {}
+    lora_categories: dict[str, list] = {}
     for lora in state.loras:
         cat = lora.get("category", "其他")
         lora_categories.setdefault(cat, []).append(lora)
@@ -205,10 +316,9 @@ def build_category_nav():
         with ui.expansion(lcat).classes("w-full").props("dense"):
             for lora in loras:
                 is_sel = state.is_lora_selected(lora["name"])
-                chip_class = "lora-chip lora-chip-selected" if is_sel else "lora-chip"
-                with ui.row().classes("items-center w-full px-2 py-1 cursor-pointer rounded hover:bg-white/5").on(
-                    "click", lambda l=lora: on_lora_click(l)
-                ):
+                with ui.row().classes(
+                    "items-center w-full px-2 py-1 cursor-pointer rounded hover:bg-white/5"
+                ).on("click", lambda l=lora: on_lora_click(l)):
                     ui.icon(
                         "check_circle" if is_sel else "radio_button_unchecked",
                         size="16px",
@@ -216,9 +326,9 @@ def build_category_nav():
                     )
                     with ui.column().classes("gap-0 ml-2"):
                         ui.label(lora["name"]).classes("text-xs font-medium")
-                        ui.label(f'{lora["base"]} · w={lora.get("weight", 0.7)}').classes(
-                            "text-xs opacity-40"
-                        )
+                        ui.label(
+                            f'{lora["base"]} · w={lora.get("weight", 0.7)}'
+                        ).classes("text-xs opacity-40")
 
 
 def switch_category(cat_id: str):
@@ -239,19 +349,19 @@ def on_lora_click(lora: dict):
 
 
 # ============================================================
-#  中間：標籤詞庫
+#  中間：標籤詞庫 + 建議提示詞
 # ============================================================
 @ui.refreshable
 def build_tag_library():
     cat = next((c for c in state.categories if c["id"] == state.active_category), None)
     if not cat:
-        ui.label("請選擇類別").classes("text-lg opacity-50")
+        ui.label(state.t("select_category")).classes("text-lg opacity-50")
         return
 
-    # 標題
+    # 標題列
     with ui.row().classes("items-center gap-2 mb-2"):
         ui.label(cat["name"]).classes("text-xl font-bold")
-        ui.badge(f'{len(cat["tags"])} 標籤').props("color=purple-8")
+        ui.badge(state.t("tag_count_badge", n=len(cat["tags"]))).props("color=purple-8")
 
     # 過濾
     tags = cat["tags"]
@@ -259,7 +369,7 @@ def build_tag_library():
         tags = [t for t in tags if state.search_query in t.lower()]
 
     if not tags:
-        ui.label("找不到符合的標籤").classes("opacity-50 text-sm italic")
+        ui.label(state.t("tag_not_found")).classes("opacity-50 text-sm italic")
         return
 
     # 標籤卡片 Grid
@@ -281,6 +391,52 @@ def build_tag_library():
             else:
                 chip.props("outline color=grey-6")
 
+    # ==== 💡 各類別建議提示詞 ====
+    suggestions = state.category_suggestions.get(cat["id"], [])
+    if suggestions:
+        ui.separator().classes("my-3")
+        with ui.row().classes("items-center gap-2 mb-2"):
+            ui.label(state.t("sugg_title")).classes("font-bold text-sm").style(
+                "background: linear-gradient(135deg, #06b6d4, #22d3ee); "
+                "-webkit-background-clip: text; -webkit-text-fill-color: transparent;"
+            )
+            ui.badge(f"{len(suggestions)}").props("color=cyan-8")
+
+        with ui.column().classes("gap-2 w-full"):
+            for sugg in suggestions:
+                with ui.card().classes("w-full sugg-chip").style(
+                    "background: rgba(6,182,212,0.06); "
+                    "border: 1px solid rgba(6,182,212,0.2); "
+                    "border-radius: 10px; padding: 8px 12px;"
+                ).on("click", lambda s=sugg, c=cat["id"]: apply_suggestion(s, c)):
+                    with ui.row().classes("items-center justify-between w-full"):
+                        ui.label(sugg).classes("text-xs flex-1 mr-2").style(
+                            "font-family: 'JetBrains Mono', monospace; opacity: 0.9;"
+                        )
+                        ui.button(
+                            state.t("sugg_apply"),
+                            on_click=lambda s=sugg, c=cat["id"]: apply_suggestion(s, c),
+                        ).props("flat no-caps size=xs color=cyan-5").stop()
+
+
+def apply_suggestion(sugg: str, cat_id: str):
+    """將建議提示詞的每個 tag 加入，跳過重複"""
+    tags = [t.strip() for t in sugg.split(",") if t.strip()]
+    added = 0
+    for tag in tags:
+        if state.add_tag(tag, cat_id):
+            added += 1
+    build_tag_library.refresh()
+    build_workbench.refresh()
+    if added:
+        ui.notify(
+            f"✅ 已加入 {added} 個標籤",
+            type="positive",
+            position="bottom-right",
+        )
+    else:
+        ui.notify("標籤已全部存在", type="info", position="bottom-right")
+
 
 def on_tag_click(text: str, category: str):
     state.toggle_tag(text, category)
@@ -293,36 +449,108 @@ def on_tag_click(text: str, category: str):
 # ============================================================
 @ui.refreshable
 def build_workbench():
-    # ---- 正面提示詞 ----
-    with ui.card().classes("w-full workbench-card").style(
-        "background: rgba(124,58,237,0.08); border: 1px solid rgba(124,58,237,0.2); border-radius: 12px;"
-    ):
+    T = state.t  # 語系捷徑
+
+    # ==== 統一提示詞輸出 (最醒目) ====
+    has_content = bool(state.selected_tags or state.selected_loras)
+
+    with ui.card().classes("w-full unified-prompt-card"):
         with ui.row().classes("items-center justify-between w-full"):
-            ui.label("✨ 正面提示詞").classes("font-bold text-sm")
+            ui.label(T("wb_unified_output")).classes("font-bold text-base").style(
+                "background: linear-gradient(135deg, #a855f7, #06b6d4); "
+                "-webkit-background-clip: text; -webkit-text-fill-color: transparent;"
+            )
             with ui.row().classes("gap-1"):
                 ui.button(
                     icon="content_copy",
+                    on_click=lambda: copy_prompt("full"),
+                ).props("flat round size=sm color=purple-4").tooltip(T("wb_tooltip_copy"))
+                ui.button(
+                    icon="settings",
+                    on_click=show_api_settings_dialog,
+                ).props("flat round size=sm color=grey-5").tooltip(T("wb_tooltip_settings"))
+
+        if has_content:
+            full_prompt = state.generate_full_prompt()
+            ui.html(f'<div class="unified-prompt-text">{full_prompt}</div>')
+
+            # 生成參數摘要
+            s = state.api_settings
+            with ui.row().classes("gap-3 flex-wrap mt-1"):
+                ui.badge(f'{s.get("width", 1920)}×{s.get("height", 1080)}').props(
+                    "color=purple-9 outline"
+                )
+                ui.badge(f'Steps: {s.get("steps", 28)}').props("color=cyan-8 outline")
+                ui.badge(f'CFG: {s.get("cfg_scale", 7.0)}').props("color=teal-8 outline")
+                ui.badge(f'{s.get("sampler", "Euler a")}').props("color=indigo-8 outline")
+
+            # 動作按鈕列
+            with ui.row().classes("w-full gap-2 mt-2"):
+                ui.button(
+                    T("btn_copy_positive"),
                     on_click=lambda: copy_prompt("positive"),
-                ).props("flat round size=sm").tooltip("複製正面提示詞")
+                ).props("outline no-caps size=sm color=purple-5").classes("action-btn")
+                ui.button(
+                    T("btn_copy_negative"),
+                    on_click=lambda: copy_prompt("negative"),
+                ).props("outline no-caps size=sm color=red-5").classes("action-btn")
+                ui.button(
+                    T("btn_copy_full"),
+                    on_click=lambda: copy_prompt("full"),
+                ).props("no-caps size=sm color=purple-8").classes("action-btn")
+                ui.button(
+                    T("btn_generate"),
+                    on_click=generate_image,
+                ).props("no-caps size=sm").classes("gen-btn action-btn")
+        else:
+            ui.label(T("wb_placeholder")).classes(
+                "opacity-40 text-sm italic py-4 text-center w-full"
+            )
+
+    # ==== 圖片預覽 ====
+    if state.last_generated_image:
+        with ui.card().classes("w-full").style(
+            "background: rgba(26,26,46,0.5); "
+            "border: 1px solid rgba(124,58,237,0.2); border-radius: 12px;"
+        ):
+            with ui.row().classes("items-center justify-between w-full"):
+                ui.label(T("wb_gen_result")).classes("font-bold text-sm")
+                ui.button(
+                    icon="close",
+                    on_click=clear_preview,
+                ).props("flat round size=sm color=grey-5")
+            ui.image(
+                f"data:image/png;base64,{state.last_generated_image}"
+            ).classes("preview-img w-full")
+
+    # ---- 正面提示詞明細 ----
+    if has_content:
+        with ui.card().classes("w-full workbench-card").style(
+            "background: rgba(124,58,237,0.08); "
+            "border: 1px solid rgba(124,58,237,0.2); border-radius: 12px;"
+        ):
+            with ui.row().classes("items-center justify-between w-full"):
+                ui.label(T("wb_positive")).classes("font-bold text-sm")
                 ui.button(
                     icon="casino",
                     on_click=randomize_prompt,
-                ).props("flat round size=sm").tooltip("隨機擾動")
+                ).props("flat round size=sm").tooltip(T("wb_tooltip_randomize"))
 
-        prompt_text = state.generate_positive_prompt()
-        ui.textarea(value=prompt_text).classes("w-full prompt-output").props(
-            "readonly outlined rows=4 dark"
-        ).style("font-size: 12px;")
+            prompt_text = state.generate_positive_prompt()
+            ui.textarea(value=prompt_text).classes("w-full prompt-output").props(
+                "readonly outlined rows=3 dark"
+            ).style("font-size: 12px;")
 
     # ---- 已選標籤列表 (含權重) ----
     if state.selected_tags:
         with ui.card().classes("w-full").style(
-            "background: rgba(26,26,46,0.6); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;"
+            "background: rgba(26,26,46,0.6); "
+            "border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;"
         ):
             with ui.row().classes("items-center justify-between w-full"):
-                ui.label("🏷️ 已選標籤").classes("font-bold text-sm")
+                ui.label(T("wb_selected_tags")).classes("font-bold text-sm")
                 ui.button(
-                    "清空",
+                    T("wb_clear"),
                     icon="delete_sweep",
                     on_click=clear_all,
                 ).props("flat size=sm color=red-4 no-caps")
@@ -338,7 +566,7 @@ def build_workbench():
                         icon=lock_icon,
                         on_click=lambda t=tag["text"]: toggle_lock(t),
                     ).props(f"flat round dense size=xs color={lock_color}").tooltip(
-                        "鎖定 (隨機時不替換)" if not tag.get("locked") else "已鎖定"
+                        T("btn_locked") if tag.get("locked") else T("btn_lock_hint")
                     )
 
                     # 標籤名稱
@@ -363,9 +591,10 @@ def build_workbench():
     # ---- 已選 LoRA ----
     if state.selected_loras:
         with ui.card().classes("w-full").style(
-            "background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.2); border-radius: 12px;"
+            "background: rgba(6,182,212,0.08); "
+            "border: 1px solid rgba(6,182,212,0.2); border-radius: 12px;"
         ):
-            ui.label("🔌 已選 LoRA").classes("font-bold text-sm")
+            ui.label(T("wb_selected_lora")).classes("font-bold text-sm")
             for lora in state.selected_loras:
                 with ui.row().classes("items-center w-full gap-2 py-1").style(
                     "border-bottom: 1px solid rgba(255,255,255,0.05);"
@@ -387,10 +616,11 @@ def build_workbench():
 
     # ---- 負面提示詞 ----
     with ui.card().classes("w-full").style(
-        "background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15); border-radius: 12px;"
+        "background: rgba(239,68,68,0.06); "
+        "border: 1px solid rgba(239,68,68,0.15); border-radius: 12px;"
     ):
         with ui.row().classes("items-center justify-between w-full"):
-            ui.label("🚫 負面提示詞").classes("font-bold text-sm")
+            ui.label(T("wb_negative")).classes("font-bold text-sm")
             with ui.row().classes("gap-1"):
                 ui.switch(
                     value=state.negative_enabled,
@@ -399,7 +629,7 @@ def build_workbench():
                 ui.button(
                     icon="content_copy",
                     on_click=lambda: copy_prompt("negative"),
-                ).props("flat round size=sm").tooltip("複製負面提示詞")
+                ).props("flat round size=sm").tooltip(T("wb_tooltip_copy_neg"))
 
         if state.negative_enabled:
             neg_text = state.generate_negative_prompt()
@@ -410,17 +640,20 @@ def build_workbench():
     # ---- 動作列 ----
     ui.separator().classes("my-1")
     with ui.row().classes("w-full justify-center gap-2 flex-wrap"):
-        ui.button("💾 儲存預設", on_click=show_save_dialog).props(
+        ui.button(T("btn_save_preset"), on_click=show_save_dialog).props(
             "outline no-caps size=sm color=purple-5"
         ).classes("action-btn")
-        ui.button("📂 載入預設", on_click=show_load_dialog).props(
+        ui.button(T("btn_load_preset"), on_click=show_load_dialog).props(
             "outline no-caps size=sm color=cyan-5"
         ).classes("action-btn")
-        ui.button("📤 匯出", on_click=export_data).props(
+        ui.button(T("btn_export"), on_click=export_data).props(
             "outline no-caps size=sm color=teal-5"
         ).classes("action-btn")
-        ui.button("📥 匯入", on_click=show_import_dialog).props(
+        ui.button(T("btn_import"), on_click=show_import_dialog).props(
             "outline no-caps size=sm color=amber-5"
+        ).classes("action-btn")
+        ui.button(T("btn_api"), on_click=show_api_settings_dialog).props(
+            "outline no-caps size=sm color=grey-5"
         ).classes("action-btn")
 
 
@@ -461,7 +694,7 @@ def clear_all():
     build_tag_library.refresh()
     build_workbench.refresh()
     build_category_nav.refresh()
-    ui.notify("已清空所有標籤", type="info", position="bottom-right")
+    ui.notify(state.t("notify_cleared"), type="info", position="bottom-right")
 
 
 def toggle_negative(value: bool):
@@ -473,40 +706,48 @@ def randomize_prompt():
     state.randomize()
     build_tag_library.refresh()
     build_workbench.refresh()
-    ui.notify("🎲 已隨機替換未鎖定標籤", type="positive", position="bottom-right")
+    ui.notify(state.t("notify_randomized"), type="positive", position="bottom-right")
 
 
-async def copy_prompt(kind: str):
+def copy_prompt(kind: str):
+    """
+    複製提示詞到剪貼板。
+    修正: ui.clipboard.write() 是同步方法，不可 await。
+    """
     if kind == "positive":
         text = state.generate_positive_prompt()
-    else:
+        notify_key = "notify_copied_positive"
+    elif kind == "negative":
         text = state.generate_negative_prompt()
+        notify_key = "notify_copied_negative"
+    elif kind == "full":
+        text = state.generate_full_prompt()
+        notify_key = "notify_copied_full"
+    else:
+        text = ""
+        notify_key = "notify_no_content"
 
     if text:
-        await ui.clipboard.write(text)
-        ui.notify(
-            f"✅ 已複製{'正面' if kind == 'positive' else '負面'}提示詞",
-            type="positive",
-            position="bottom-right",
-        )
+        # FIX: ui.clipboard.write() returns None — do NOT await it
+        ui.clipboard.write(text)
+        ui.notify(state.t(notify_key), type="positive", position="bottom-right")
     else:
-        ui.notify("沒有內容可複製", type="warning", position="bottom-right")
+        ui.notify(state.t("notify_no_content"), type="warning", position="bottom-right")
 
 
 # ============================================================
 #  對話框
 # ============================================================
 def show_save_dialog():
-    with ui.dialog() as dlg, ui.card().style(
-        "min-width: 400px; border-radius: 16px;"
-    ):
-        ui.label("💾 儲存預設組").classes("text-lg font-bold")
-        name_input = ui.input("預設名稱", value="我的預設").classes("w-full")
-        desc_input = ui.input("描述 (選填)").classes("w-full")
+    T = state.t
+    with ui.dialog() as dlg, ui.card().style("min-width: 400px; border-radius: 16px;"):
+        ui.label(T("dlg_save_preset_title")).classes("text-lg font-bold")
+        name_input = ui.input(T("dlg_save_preset_name"), value="").classes("w-full")
+        desc_input = ui.input(T("dlg_save_preset_desc")).classes("w-full")
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
-            ui.button("取消", on_click=dlg.close).props("flat no-caps")
+            ui.button(T("btn_cancel"), on_click=dlg.close).props("flat no-caps")
             ui.button(
-                "儲存",
+                T("btn_save"),
                 on_click=lambda: save_preset(dlg, name_input.value, desc_input.value),
             ).props("no-caps color=purple-8")
     dlg.open()
@@ -514,21 +755,24 @@ def show_save_dialog():
 
 def save_preset(dlg, name: str, desc: str):
     if not name.strip():
-        ui.notify("請輸入名稱", type="warning")
+        ui.notify(state.t("notify_preset_need_name"), type="warning")
         return
     state.save_as_preset(name.strip(), desc.strip())
     dlg.close()
-    ui.notify(f"✅ 已儲存預設: {name}", type="positive", position="bottom-right")
+    ui.notify(
+        state.t("notify_preset_saved", name=name), type="positive", position="bottom-right"
+    )
 
 
 def show_load_dialog():
+    T = state.t
     with ui.dialog() as dlg, ui.card().style(
         "min-width: 500px; max-height: 600px; border-radius: 16px;"
     ):
-        ui.label("📂 載入預設組").classes("text-lg font-bold mb-2")
+        ui.label(T("dlg_load_preset_title")).classes("text-lg font-bold mb-2")
 
         if not state.presets:
-            ui.label("尚無預設組").classes("opacity-50")
+            ui.label(T("dlg_no_presets")).classes("opacity-50")
         else:
             for preset in state.presets:
                 with ui.card().classes("w-full preset-card mb-2").style(
@@ -542,10 +786,12 @@ def show_load_dialog():
                                 ui.label(desc).classes("text-xs opacity-50")
                         ui.button(
                             icon="delete",
-                            on_click=lambda e, p=preset["name"], d=dlg: delete_preset_action(e, p, d),
+                            on_click=lambda e, p=preset["name"], d=dlg: delete_preset_action(
+                                e, p, d
+                            ),
                         ).props("flat round size=sm color=red-4")
 
-        ui.button("關閉", on_click=dlg.close).props("flat no-caps").classes("mt-2")
+        ui.button(T("btn_close"), on_click=dlg.close).props("flat no-caps").classes("mt-2")
     dlg.open()
 
 
@@ -555,14 +801,18 @@ def load_preset(name: str, dlg):
     build_tag_library.refresh()
     build_workbench.refresh()
     build_category_nav.refresh()
-    ui.notify(f"✅ 已載入: {name}", type="positive", position="bottom-right")
+    ui.notify(
+        state.t("notify_preset_loaded", name=name), type="positive", position="bottom-right"
+    )
 
 
 def delete_preset_action(e, name: str, dlg):
     e.stop_propagation = True
     state.delete_preset(name)
     dlg.close()
-    ui.notify(f"🗑️ 已刪除: {name}", type="info", position="bottom-right")
+    ui.notify(
+        state.t("notify_preset_deleted", name=name), type="info", position="bottom-right"
+    )
     show_load_dialog()
 
 
@@ -570,23 +820,22 @@ def export_data():
     data = state.export_all()
     json_str = json.dumps(data, ensure_ascii=False, indent=2)
     ui.download(json_str.encode("utf-8"), "promptmaster_export.json")
-    ui.notify("📤 已匯出資料", type="positive", position="bottom-right")
+    ui.notify(state.t("notify_exported"), type="positive", position="bottom-right")
 
 
 def show_import_dialog():
-    with ui.dialog() as dlg, ui.card().style(
-        "min-width: 400px; border-radius: 16px;"
-    ):
-        ui.label("📥 匯入資料").classes("text-lg font-bold")
-        ui.label("請選擇 JSON 檔案匯入").classes("text-xs opacity-50 mb-2")
+    T = state.t
+    with ui.dialog() as dlg, ui.card().style("min-width: 400px; border-radius: 16px;"):
+        ui.label(T("dlg_import_title")).classes("text-lg font-bold")
+        ui.label(T("dlg_import_desc")).classes("text-xs opacity-50 mb-2")
 
-        upload = ui.upload(
-            label="選擇 JSON 檔案",
+        ui.upload(
+            label=T("dlg_import_label"),
             on_upload=lambda e: handle_import(e, dlg),
             auto_upload=True,
         ).props("accept=.json").classes("w-full")
 
-        ui.button("取消", on_click=dlg.close).props("flat no-caps").classes("mt-2")
+        ui.button(T("btn_cancel"), on_click=dlg.close).props("flat no-caps").classes("mt-2")
     dlg.open()
 
 
@@ -599,9 +848,153 @@ def handle_import(e, dlg):
         build_tag_library.refresh()
         build_category_nav.refresh()
         build_workbench.refresh()
-        ui.notify("✅ 匯入成功", type="positive", position="bottom-right")
+        ui.notify(state.t("notify_imported"), type="positive", position="bottom-right")
     except Exception as ex:
-        ui.notify(f"匯入失敗: {ex}", type="negative", position="bottom-right")
+        ui.notify(
+            state.t("notify_import_fail", e=ex), type="negative", position="bottom-right"
+        )
+
+
+# ============================================================
+#  圖片生成
+# ============================================================
+async def generate_image():
+    """Call SD WebUI API to generate image"""
+    if not state.selected_tags:
+        ui.notify(state.t("notify_select_tags_first"), type="warning", position="bottom-right")
+        return
+
+    ui.notify(
+        state.t("notify_generating"),
+        type="info",
+        position="bottom-right",
+        timeout=None,
+        spinner=True,
+        close_button=True,
+    )
+
+    try:
+        result = await state.generate_image_api()
+        build_workbench.refresh()
+        if result:
+            ui.notify(state.t("notify_gen_done"), type="positive", position="bottom-right")
+        else:
+            ui.notify(state.t("notify_gen_empty"), type="warning", position="bottom-right")
+    except ConnectionError as e:
+        ui.notify(
+            f"{state.t('notify_gen_fail_conn')}\n{e}",
+            type="negative",
+            position="bottom-right",
+            multi_line=True,
+        )
+    except Exception as e:
+        ui.notify(
+            state.t("notify_gen_fail", e=e), type="negative", position="bottom-right"
+        )
+
+
+def clear_preview():
+    state.last_generated_image = None
+    build_workbench.refresh()
+
+
+# ============================================================
+#  API 設定對話框
+# ============================================================
+def show_api_settings_dialog():
+    T = state.t
+    s = state.api_settings
+    with ui.dialog() as dlg, ui.card().style("min-width: 500px; border-radius: 16px;"):
+        ui.label(T("dlg_api_title")).classes("text-lg font-bold")
+        ui.label(T("dlg_api_desc")).classes("text-xs opacity-50 mb-2")
+
+        api_url = ui.input(T("dlg_api_url"), value=s.get("api_url", "http://127.0.0.1:7860")).classes("w-full")
+        api_key = ui.input(T("dlg_api_key"), value=s.get("api_key", "")).classes("w-full").props("type=password")
+
+        ui.separator().classes("my-2")
+        ui.label(T("dlg_gen_params")).classes("font-bold text-sm")
+
+        with ui.row().classes("w-full gap-4"):
+            width_input = ui.number(
+                T("dlg_width"), value=s.get("width", 1920), min=256, max=4096, step=64
+            ).classes("flex-1")
+            height_input = ui.number(
+                T("dlg_height"), value=s.get("height", 1080), min=256, max=4096, step=64
+            ).classes("flex-1")
+
+        with ui.row().classes("w-full gap-4"):
+            steps_input = ui.number(
+                T("dlg_steps"), value=s.get("steps", 28), min=1, max=150, step=1
+            ).classes("flex-1")
+            cfg_input = ui.number(
+                T("dlg_cfg"), value=s.get("cfg_scale", 7.0), min=1.0, max=30.0, step=0.5,
+                format="%.1f"
+            ).classes("flex-1")
+
+        sampler_input = ui.select(
+            [
+                "Euler a", "Euler", "DPM++ 2M Karras", "DPM++ SDE Karras",
+                "DPM++ 2M SDE Karras", "DDIM", "UniPC", "LMS",
+                "DPM++ 2S a Karras", "DPM2 a Karras",
+            ],
+            value=s.get("sampler", "Euler a"),
+            label=T("dlg_sampler"),
+        ).classes("w-full")
+
+        seed_input = ui.number(
+            T("dlg_seed"), value=s.get("seed", -1), min=-1, step=1
+        ).classes("w-full")
+
+        # 常用尺寸快捷 (含 4K 16:9)
+        ui.label(T("dlg_quick_size")).classes("text-xs opacity-50 mt-2")
+        with ui.row().classes("gap-1 flex-wrap"):
+            for w, h, label in [
+                (1920, 1080, "4K 16:9"),
+                (1280, 720, "HD 16:9"),
+                (1024, 1024, "1:1 HD"),
+                (1024, 768, "4:3"),
+                (768, 1024, "3:4"),
+                (512, 512, "1:1"),
+                (512, 768, "2:3"),
+                (768, 512, "3:2"),
+            ]:
+                ui.button(
+                    f"{label} ({w}×{h})",
+                    on_click=lambda wi=w, hi=h: (
+                        width_input.set_value(wi), height_input.set_value(hi)
+                    ),
+                ).props("outline no-caps size=xs color=grey-6")
+
+        with ui.row().classes("w-full justify-end gap-2 mt-3"):
+            ui.button(T("btn_cancel"), on_click=dlg.close).props("flat no-caps")
+            ui.button(
+                T("btn_save_settings"),
+                on_click=lambda: save_api_settings(
+                    dlg, api_url.value, api_key.value,
+                    int(width_input.value or 1920), int(height_input.value or 1080),
+                    int(steps_input.value or 28), float(cfg_input.value or 7.0),
+                    sampler_input.value,
+                    int(seed_input.value if seed_input.value is not None else -1),
+                ),
+            ).props("no-caps color=purple-8")
+    dlg.open()
+
+
+def save_api_settings(dlg, api_url, api_key, width, height, steps, cfg, sampler, seed):
+    state.api_settings.update({
+        "api_url": api_url,
+        "api_key": api_key,
+        "width": width,
+        "height": height,
+        "steps": steps,
+        "cfg_scale": cfg,
+        "sampler": sampler,
+        "seed": seed,
+    })
+    state.save_settings()
+    dlg.close()
+    build_workbench.refresh()
+    ui.notify(state.t("notify_settings_saved"), type="positive", position="bottom-right")
 
 
 # ============================================================

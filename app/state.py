@@ -4,15 +4,20 @@ PromptMaster Pro — 應用狀態管理
 import json
 import os
 import random
+import asyncio
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 from app.default_data import (
     DEFAULT_CATEGORIES,
     DEFAULT_LORAS,
     DEFAULT_NEGATIVE_PROMPTS,
     DEFAULT_PRESETS,
+    DEFAULT_API_SETTINGS,
+    CATEGORY_SUGGESTIONS,
 )
+from app.i18n import I18n, DEFAULT_LOCALE
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -43,6 +48,20 @@ class AppState:
         # UI
         self.dark_mode: bool = True
 
+        # 多語系
+        self.locale: str = DEFAULT_LOCALE
+        self.i18n: I18n = I18n(DEFAULT_LOCALE)
+
+        # 類別建議提示詞
+        self.category_suggestions: dict = CATEGORY_SUGGESTIONS
+
+        # API 設定
+        self.api_settings: dict = self._load_settings()
+
+        # 生成結果
+        self.last_generated_image: Optional[str] = None  # base64 or file path
+        self.is_generating: bool = False
+
     # ---------- 資料載入 ----------
 
     def _load_categories(self) -> list[dict]:
@@ -72,6 +91,29 @@ class AppState:
                 pass
         return [dict(p) for p in DEFAULT_PRESETS]
 
+    def _load_settings(self) -> dict:
+        path = DATA_DIR / "settings.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                # 確保新增的 locale 欄位存在
+                data.setdefault("locale", DEFAULT_LOCALE)
+                return data
+            except Exception:
+                pass
+        return dict(DEFAULT_API_SETTINGS)
+
+    def set_locale(self, locale: str):
+        """切換語系"""
+        self.locale = locale
+        self.i18n.set_locale(locale)
+        self.api_settings["locale"] = locale
+        self.save_settings()
+
+    def t(self, key: str, **kwargs) -> str:
+        """語系翻譯捷徑"""
+        return self.i18n.t(key, **kwargs)
+
     # ---------- 持久化 ----------
 
     def save_categories(self):
@@ -87,6 +129,11 @@ class AppState:
     def save_presets(self):
         (DATA_DIR / "presets.json").write_text(
             json.dumps(self.presets, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def save_settings(self):
+        (DATA_DIR / "settings.json").write_text(
+            json.dumps(self.api_settings, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
     # ---------- 標籤操作 ----------
@@ -185,6 +232,82 @@ class AppState:
         if not self.negative_enabled:
             return ""
         return ", ".join(self.negative_prompts)
+
+    def generate_full_prompt(self) -> str:
+        """生成完整的統一提示詞 (正面 + 負面 + 參數)"""
+        pos = self.generate_positive_prompt()
+        neg = self.generate_negative_prompt()
+        s = self.api_settings
+
+        lines = []
+        lines.append(pos)
+        if neg:
+            lines.append(f"\nNegative prompt: {neg}")
+        lines.append(f"\nSteps: {s.get('steps', 28)}, "
+                     f"Sampler: {s.get('sampler', 'Euler a')}, "
+                     f"CFG scale: {s.get('cfg_scale', 7.0)}, "
+                     f"Seed: {s.get('seed', -1)}, "
+                     f"Size: {s.get('width', 512)}x{s.get('height', 768)}")
+        return "".join(lines)
+
+    def generate_prompt_for_api(self) -> dict:
+        """生成 API 請求 payload"""
+        pos = self.generate_positive_prompt()
+        neg = self.generate_negative_prompt()
+        s = self.api_settings
+        return {
+            "prompt": pos,
+            "negative_prompt": neg,
+            "width": s.get("width", 512),
+            "height": s.get("height", 768),
+            "steps": s.get("steps", 28),
+            "cfg_scale": s.get("cfg_scale", 7.0),
+            "sampler_name": s.get("sampler", "Euler a"),
+            "seed": s.get("seed", -1),
+        }
+
+    async def generate_image_api(self) -> Optional[str]:
+        """呼叫 SD WebUI API 生成圖片，回傳 base64 字串"""
+        import urllib.request
+        import urllib.error
+
+        self.is_generating = True
+        self.last_generated_image = None
+
+        payload = self.generate_prompt_for_api()
+        api_url = self.api_settings.get("api_url", "http://127.0.0.1:7860")
+        url = f"{api_url.rstrip('/')}/sdapi/v1/txt2img"
+
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            # Run blocking IO in thread
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=120))
+            result = json.loads(resp.read().decode("utf-8"))
+            images = result.get("images", [])
+            if images:
+                self.last_generated_image = images[0]  # base64
+                # Save to file
+                import base64
+                img_dir = DATA_DIR / "generated"
+                img_dir.mkdir(exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                img_path = img_dir / f"gen_{ts}.png"
+                img_path.write_bytes(base64.b64decode(images[0]))
+                return str(img_path)
+        except urllib.error.URLError as e:
+            raise ConnectionError(f"Cannot connect to API: {e.reason}")
+        except Exception as e:
+            raise RuntimeError(f"API error: {e}")
+        finally:
+            self.is_generating = False
+        return None
 
     # ---------- 預設組操作 ----------
 

@@ -191,6 +191,126 @@ DEFAULT_NEGATIVE_PROMPTS = [
     "morbid", "out of frame", "extra fingers"
 ]
 
+# ============================================================
+# 各類別不重複建議提示詞 (用於「💡 建議」按鈕)
+# 每類別至少 5 條，各條皆不重複
+# 預設輸出解析度: 4K 16:9 (3840×2160 → 生成時縮放為 1920×1080 或 1280×720)
+# ============================================================
+CATEGORY_SUGGESTIONS: dict[str, list[str]] = {
+    "style": [
+        "Masterpiece, Best Quality, 8K UHD, Ultra Detailed",
+        "Official Art, Vibrant Colors, Highly Detailed, Trending on ArtStation",
+        "Photorealistic, RAW Photo, DSLR, Sharp Focus, HDR",
+        "Anime Style, Beautiful Lighting, Best Quality, Cinematic",
+        "Watercolor, Pastel Colors, Soft Edges, Dreamy Atmosphere",
+        "Dark Fantasy, Gritty, Textured, Epic, Dramatic",
+        "Vaporwave, Synthwave, Neon Pastel, Retro Aesthetic",
+        "Ukiyo-e, Woodblock Print, Traditional Japanese Art",
+        "Oil Painting, Impasto, Thick Paint, Textured Canvas",
+        "Pixel Art, 16-Bit, Retro Game, Chiptune Aesthetic",
+    ],
+    "character": [
+        "1girl, Solo, Beautiful Face, Detailed Eyes, Long Hair",
+        "1boy, Muscular, Handsome, Sharp Jawline, Confident Pose",
+        "Multiple Girls, Best Friends, Cheerful, Colorful Outfits",
+        "Couple, Romantic, Holding Hands, Soft Lighting",
+        "Gothic Witch, Dark Aura, Spell Casting, Mysterious",
+        "Elven Princess, Pointed Ears, Ethereal Beauty, Glowing Eyes",
+        "Cyberpunk Hacker, Augmented Reality Visor, Neon Tattoos",
+        "Samurai Warrior, Battle Ready, Katana, Fierce Expression",
+        "Maid, Apron, Frills, Gentle Smile, Serving Tea",
+        "Angel, White Wings, Halo, Radiant Light, Divine",
+    ],
+    "outfit": [
+        "White Summer Dress, Flowing Fabric, Soft Wind, Delicate",
+        "Gothic Lolita, Black Dress, Lace Gloves, Petticoat",
+        "School Uniform, Sailor Collar, Pleated Skirt, Knee Socks",
+        "Full Plate Armor, Battle Worn, Heraldic Crest, Cape",
+        "Traditional Kimono, Floral Pattern, Obi Belt, Zori Sandals",
+        "Cheongsam, Silk, Embroidered, Dragon Motif, Elegant",
+        "Fantasy Robe, Wizard Staff, Magical Runes, Hood Up",
+        "Futuristic Bodysuit, Holographic, Neon Piping, Sleek",
+        "Wedding Dress, Veil, Bouquet, Shimmering White",
+        "Hanfu, Han Dynasty, Flowing Sleeves, Jade Accessories",
+    ],
+    "scene": [
+        "Cherry Blossom Park, Spring, Petals Falling, Soft Light",
+        "Cyberpunk City, Neon Signs, Rain Wet Streets, Night",
+        "Enchanted Forest, Ancient Trees, Glowing Fireflies",
+        "Space Station, Stars Through Window, Zero Gravity",
+        "Japanese Garden, Koi Pond, Stone Lantern, Bamboo",
+        "Ancient Ruins, Overgrown, Mystical, Hidden Temple",
+        "Rooftop at Sunset, City Skyline, Golden Hour, Warm Tones",
+        "Underwater Kingdom, Coral Reef, Bioluminescent, Turquoise",
+        "Snow Village, Cozy Cottages, Winter Wonderland, Fireplace",
+        "Library, Towering Bookshelves, Warm Candlelight, Cozy",
+    ],
+    "material": [
+        "Glossy Latex, Reflective Surface, Tight, Shiny",
+        "Transparent Resin, Crystal Clear, Encased Flowers",
+        "Velvet, Rich Texture, Deep Color, Soft Touch",
+        "Porcelain, Smooth, Delicate, Hand-painted Patterns",
+        "Holographic Foil, Rainbow Shift, Iridescent",
+        "Worn Leather, Stitched, Battle Scarred, Rustic",
+        "Silk, Lustrous, Flowing, Elegant Drape",
+        "Marble, Veined, Cold Stone, Classical",
+        "Stained Glass, Colorful, Luminous, Cathedral Light",
+        "Wood Grain, Natural, Carved, Warm Hue",
+    ],
+    "lighting": [
+        "Cinematic Lighting, Three Point, Dramatic Shadows",
+        "Golden Hour, Warm Sunlight, Long Shadows, Enchanting",
+        "Moonlight, Cool Blue, Ethereal, Serene Night",
+        "Neon Glow, Urban, Purple and Pink, Wet Reflection",
+        "God Rays, Volumetric Light, Dust Particles, Majestic",
+        "Bioluminescence, Ocean Blue, Magical, Bio-glow",
+        "Candlelight, Warm Flicker, Intimate, Soft Shadows",
+        "Subsurface Scattering, Translucent Skin, Soft Diffuse",
+        "Studio Lighting, Professional, Even, Clean White",
+        "Backlight, Silhouette, Dramatic, High Contrast",
+    ],
+    "composition": [
+        "Close-up Portrait, Bokeh Background, Shallow Depth of Field",
+        "Full Body Shot, Dynamic Pose, Action, Wide Angle",
+        "Bird's Eye View, Aerial, Top Down, Overhead Perspective",
+        "Dutch Angle, Tilted, Tension, Cinematic Framing",
+        "Rule of Thirds, Balanced, Professional Framing",
+        "Panoramic View, Wide Landscape, Epic Scale, 16:9",
+        "Symmetry, Perfect Balance, Mirror Image, Elegant",
+        "Low Angle, Heroic, Looking Up, Towering Figure",
+        "Profile View, Side Silhouette, Artistic, Minimalist",
+        "Split Screen, Dual Story, Before After, Contrast",
+    ],
+    "quality": [
+        "8K UHD, Ultra High Definition, Crisp Details",
+        "Highly Detailed, Intricate, Complex Textures, Stunning",
+        "Sharp Focus, Crystal Clear, Professional Photography",
+        "Hyper Realistic, Photographic Quality, True to Life",
+        "HDR, High Dynamic Range, Rich Contrast, Vivid",
+        "Ray Tracing, Global Illumination, Accurate Reflections",
+        "Depth of Field, Cinematic Blur, Professional Look",
+        "Ultra Realistic, Skin Texture, Pores Visible, True Detail",
+        "Vivid Colors, Saturated, Color Graded, Film Look",
+        "Beautiful Lighting, Perfect Composition, Gallery Quality",
+    ],
+}
+
+# ============================================================
+# 預設 API 輸出規格: 4K 16:9
+# 實際生成使用 1920×1080 (4K 縮放比，兼顧速度與品質)
+# ============================================================
+DEFAULT_API_SETTINGS = {
+    "api_type": "sd_webui",
+    "api_url": "http://127.0.0.1:7860",
+    "api_key": "",
+    "width": 1920,
+    "height": 1080,
+    "steps": 28,
+    "cfg_scale": 7.0,
+    "sampler": "Euler a",
+    "seed": -1,
+}
+
 # 內建預設組
 DEFAULT_PRESETS = [
     {
