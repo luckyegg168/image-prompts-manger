@@ -407,16 +407,13 @@ def build_tag_library():
                 with ui.card().classes("w-full sugg-chip").style(
                     "background: rgba(6,182,212,0.06); "
                     "border: 1px solid rgba(6,182,212,0.2); "
-                    "border-radius: 10px; padding: 8px 12px;"
+                    "border-radius: 10px; padding: 8px 12px; cursor: pointer;"
                 ).on("click", lambda s=sugg, c=cat["id"]: apply_suggestion(s, c)):
-                    with ui.row().classes("items-center justify-between w-full"):
-                        ui.label(sugg).classes("text-xs flex-1 mr-2").style(
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        ui.icon("add_circle_outline", size="16px", color="#06b6d4")
+                        ui.label(sugg).classes("text-xs flex-1").style(
                             "font-family: 'JetBrains Mono', monospace; opacity: 0.9;"
                         )
-                        ui.button(
-                            state.t("sugg_apply"),
-                            on_click=lambda s=sugg, c=cat["id"]: apply_suggestion(s, c),
-                        ).props("flat no-caps size=xs color=cyan-5").stop()
 
 
 def apply_suggestion(sugg: str, cat_id: str):
